@@ -2,50 +2,48 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>SimLap · Motorcycle lab</title>
-  <link rel="stylesheet" href="style.css">
-  <script src="app.js" defer></script>
+  <title>SimLap telemetry</title>
+  <link rel="stylesheet" href="style.css"><link rel="icon" href="data:,">
+  <script src="plot.js" defer></script><script src="app.js" defer></script>
 </head>
 <body>
-  <aside>
-    <a class="brand" href="/">S<span>↗</span> <b>SIMLAP</b></a>
-    <div class="eyebrow">ELECTRIC MOTORCYCLE LAB</div>
-    <div class="sidebar-heading"><h2>Simulation runs</h2><button id="refresh" title="Refresh runs" aria-label="Refresh runs">↻</button></div>
-    <nav id="runs" aria-label="Simulation runs"></nav>
-    <div class="sidebar-note"><span class="dot"></span> Local physics workspace<br><small>Full-resolution logs stay on disk.</small></div>
-  </aside>
-  <main>
-    <header><div><div class="eyebrow">MANEUVER ANALYSIS / <span id="run-date">—</span></div><h1 id="title">Your motorcycle, in motion.</h1><p id="subtitle">Choose a simulation to explore its dynamics and energy flow.</p></div><span class="badge" id="status">READY</span></header>
-    <div id="notice" role="status">Loading simulations…</div>
-    <div id="workspace" hidden>
-      <section id="summary" class="metrics" aria-label="Run summary"></section>
-      <div class="analysis-grid">
-        <section class="panel path-panel">
-          <div class="panel-heading"><div><div class="eyebrow">01 / MANEUVER</div><h2>Ground trajectory</h2></div><span class="unit">METERS · EQUAL SCALE</span></div>
-          <canvas id="path" aria-label="Motorcycle ground trajectory and playback position" role="img"></canvas>
-          <div class="playback"><button id="play" aria-label="Play or pause maneuver">▶ Play</button><input id="scrub" aria-label="Simulation playback time" type="range" min="0" max="1000" value="0"><output id="time">0.00 s</output></div>
-          <div id="instant" class="instant"></div>
-        </section>
-        <section class="panel vehicle-panel">
-          <div class="panel-heading"><div><div class="eyebrow">02 / POWERTRAIN</div><h2>Energy at this instant</h2></div><span class="unit">kW</span></div>
-          <div id="energy"></div>
-          <div class="model-note"><b>Planar 3 DOF</b><p>Longitudinal, lateral and yaw motion. Lean is an equilibrium estimate. Positive pack power means discharge; negative means charging.</p></div>
-          <div id="config-strip"></div>
-        </section>
+  <header class="toolbar">
+    <strong>SIMLAP / TELEMETRY</strong>
+    <label>Run <select id="run-select" aria-label="Simulation run"></select></label>
+    <button id="refresh">Refresh</button>
+    <label>Compare <select id="compare"><option value="">None</option></select></label>
+  </header>
+  <div id="notice" role="status">Loading runs…</div>
+  <div id="workspace" hidden>
+    <aside>
+      <h1>Channels <span id="channel-count"></span></h1>
+      <input id="search" type="search" placeholder="Filter channels…" aria-label="Filter channels">
+      <div class="channel-actions"><button id="select-filtered">Select filtered</button><button id="clear-selection">Clear</button></div>
+      <label class="destination">Destination <select id="target-plot"></select></label>
+      <button id="add-channels">Add selected channels</button>
+      <p class="hint">Double-click a channel to add it directly. Empty channels remain selectable.</p>
+      <div id="channels" role="group" aria-label="Logged channels"></div>
+    </aside>
+    <main>
+      <div id="run-info" class="run-info"></div>
+      <div class="toolbar plot-toolbar">
+        <button id="add-plot">+ Plot</button>
+        <label>Columns <select id="columns"><option>1</option><option selected>2</option><option>3</option></select></label>
+        <button id="reset-layout">Reset layout</button>
+        <span id="layout-status" class="hint">Layout saved in this browser</span>
       </div>
-      <section class="panel telemetry-panel">
-        <div class="panel-heading"><div><div class="eyebrow">03 / TELEMETRY</div><h2>Through the maneuver</h2></div><div class="selectors"><label>View<select id="view"><option value="motion">Motion</option><option value="power">Power & energy</option><option value="grip">Tires & balance</option><option value="controls">Control inputs</option></select></label><label>Compare<select id="compare"><option value="">No comparison</option></select></label></div></div>
-        <div id="charts" class="charts"></div><p class="hint">Click a chart to move the playback cursor. Dashed traces show the comparison run. Display data is sampled; CSV contains every physics step.</p>
-      </section>
-      <section class="panel inspect-panel">
-        <div class="panel-heading"><div><div class="eyebrow">04 / INSPECT</div><h2>Every signal, every step</h2></div><label>Signal<select id="signal"></select></label></div>
-        <canvas id="raw-chart" class="chart" role="img" aria-label="Selected telemetry signal over time"></canvas>
-        <div class="downloads" id="downloads"></div>
-        <details><summary>Resolved vehicle configuration</summary><pre id="config"></pre></details>
-        <details><summary>Run metrics & numerical checks</summary><pre id="checks"></pre></details>
-      </section>
-      <footer>SIMLAP / PHYSICS FIRST <span>Assumed parameters · replace with measured maps for calibration</span></footer>
-    </div>
-  </main>
+      <div class="toolbar time-toolbar">
+        <label>From [s] <input id="time-start" type="number" step="any" value="0"></label>
+        <label>To [s] <input id="time-end" type="number" step="any"></label>
+        <button id="apply-range">Apply range</button><button id="fit-range">Fit time</button>
+        <button id="play">Play</button>
+        <label class="cursor">Cursor <input id="scrub" type="range" min="0" max="1000" value="0"></label>
+        <output id="cursor-time">0.0000 s</output>
+      </div>
+      <p class="hint instruction">Click a plot to inspect a sample. Drag across a time plot to zoom; double-click to fit. Solid = selected run; dashed = comparison. Values and units are as logged.</p>
+      <div id="plots"></div>
+      <details class="artifacts"><summary>Files, configuration and run metrics</summary><div id="downloads"></div><div class="metadata"><pre id="config"></pre><pre id="checks"></pre></div></details>
+    </main>
+  </div>
 </body>
 </html>

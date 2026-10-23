@@ -1,0 +1,61 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Telemetry smoke test</title></head>
+<!-- Temporarily copy to dashboard/_smoke.html and open /_smoke.html with the local server running.
+     Use an isolated browser profile: this check resets the saved telemetry layout. -->
+<body><pre id="result">RUNNING</pre><iframe src="/" style="width:1400px;height:1100px;border:0"></iframe>
+<script>
+const frame=document.querySelector('iframe');
+const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+function assert(value,message){if(!value)throw new Error(message);}
+frame.onload=async()=>{
+ try{
+  const w=frame.contentWindow,d=w.document,errors=[];
+  w.addEventListener('error',event=>errors.push(event.message));
+  for(let i=0;i<200&&d.getElementById('workspace').hidden;i++)await wait(50);
+  assert(!d.getElementById('workspace').hidden,'Run did not load');
+  assert(w.eval('run.rows.length===run.summary.samples'),'Full CSV sample count mismatch');
+  assert(d.querySelectorAll('.channel').length===w.eval('run.columns.length'),'Some channels omitted');
+  d.getElementById('reset-layout').click();await wait(50);
+  assert(d.querySelectorAll('.plot').length===4,'Default plots missing');
+  d.getElementById('add-plot').click();await wait(50);
+  const target=w.eval('activePlot');
+  d.getElementById('search').value='battery_';d.getElementById('search').oninput();
+  assert(d.querySelectorAll('.channel').length>3,'Search failed');
+  d.getElementById('select-filtered').click();d.getElementById('add-channels').click();await wait(50);
+  assert(w.eval('layout.plots.at(-1).series.length')>3,'Batch add failed');
+  let panel=d.querySelector(`[data-plot-id="${target}"]`);
+  const color=panel.querySelector('input[type=color]');color.value='#ff0000';color.oninput();
+  const axis=panel.querySelector('select[aria-label^="Axis for"]');axis.value='right';axis.onchange();await wait(50);
+  assert(w.eval('layout.plots.at(-1).series[0].color')==='#ff0000','Color not applied');
+  assert(w.eval('layout.plots.at(-1).series[0].axis')==='right','Right axis not applied');
+  w.draw();
+  assert(panel.querySelector('canvas').plotGeometry.area.right<panel.querySelector('canvas').clientWidth-40,'Right axis not rendered');
+  const firstChannel=w.eval('layout.plots.at(-1).series[0].channel');
+  const move=panel.querySelector('select[aria-label^="Move "]');move.value=w.eval('layout.plots[0].id');move.onchange();await wait(50);
+  assert(w.eval('layout.plots[0].series.some(s=>s.channel==='+JSON.stringify(firstChannel)+')'),'Trace move failed');
+  panel=d.querySelector(`[data-plot-id="${target}"]`);panel.querySelector('button[title="Move plot earlier"]').click();await wait(50);
+  assert(w.eval('layout.plots[3].id')===target,'Plot reorder failed');
+  const saved=JSON.parse(w.localStorage.getItem('simlap.telemetry.layout.v1'));assert(saved.plots[3].id===target,'Layout was not persisted');
+  d.getElementById('time-start').value='1';d.getElementById('time-end').value='2';d.getElementById('apply-range').click();await wait(50);
+  assert(w.eval('range[0]===1&&range[1]===2'),'Time window failed');
+  d.getElementById('scrub').value=500;d.getElementById('scrub').oninput();await wait(50);w.draw();
+  assert(d.getElementById('cursor-time').textContent==='1.5000 s','Shared cursor failed');
+  assert(d.querySelector('.legend .value').textContent!=='—','Legend has no sample value');
+  d.getElementById('fit-range').click();d.getElementById('play').click();await wait(100);d.getElementById('play').click();
+  const runs=await (await fetch('/api/runs')).json();
+  d.getElementById('compare').value=runs[1].run_id;await d.getElementById('compare').onchange();await wait(50);
+  assert(d.querySelector('.legend table').textContent.includes('Compare'),'Comparison legend missing');
+  const corner=runs.find(r=>r.maneuver==='cornering');await w.selectRun(corner.run_id);await wait(50);
+  d.getElementById('add-plot').click();d.getElementById('search').value='y_m';d.getElementById('search').oninput();
+  w.addChannels(['y_m']);await wait(50);panel=d.querySelector('.plot:last-child');
+  const x=panel.querySelector('select[aria-label="X-axis channel"]');x.value='x_m';x.onchange();
+  const equal=panel.querySelector('input[aria-label="Equal X and Y scale"]');equal.checked=true;equal.onchange();await wait(50);
+  w.draw();assert(panel.querySelector('canvas').plotGeometry.xr[1]>0,'XY plot failed');
+  for(const link of d.querySelectorAll('#downloads a'))assert((await fetch(link.href)).ok,'Download failed');
+  frame.style.width='390px';await wait(100);assert(d.documentElement.scrollWidth<=d.documentElement.clientWidth+1,'Mobile layout overflows');
+  assert(w.readLayout().plots[3].id===target,'Layout restoration failed');
+  assert(errors.length===0,errors.join('\n'));
+  d.getElementById('reset-layout').click();w.localStorage.removeItem('simlap.telemetry.layout.v1');
+  document.getElementById('result').textContent='PASS: full resolution, all channels, search, multi-add, colors, left/right axes, move trace, reorder, saved layout, time window, cursor, playback, comparison, XY, downloads, mobile layout';
+ }catch(error){document.getElementById('result').textContent='FAIL: '+error.stack;}
+};
+</script></body></html>

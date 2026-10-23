@@ -1,199 +1,206 @@
 "use strict";
 
-const $ = id => document.getElementById(id);
-const colors = ["#28765a", "#db713b", "#537d9e", "#9574aa"];
-const names = {acceleration: "Acceleration", braking: "Braking", cornering: "Steady-state cornering"};
-let runs = [], run = null, comparison = null, fraction = 0, playing = false, lastFrame = 0, selectionVersion = 0;
-const views = {
-  motion: [
-    ["Speed · km/h", [["speed_mps", "Ground speed", 3.6]]],
-    ["Acceleration · m/s²", [["ax_mps2", "Longitudinal"], ["ay_mps2", "Lateral"]]],
-    ["Yaw rate · rad/s", [["yaw_rate_radps", "Yaw rate"]]],
-    ["Lean estimate · degrees", [["lean_estimate_deg", "Equilibrium lean"]]]
-  ],
-  power: [
-    ["Power · kW", [["battery_terminal_power_w", "Pack", .001], ["motor_shaft_power_w", "Shaft", .001], ["wheel_drive_power_w", "Wheel", .001]]],
-    ["Heat generation · kW", [["battery_loss_w", "Battery", .001], ["motor_loss_w", "Motor", .001], ["inverter_loss_w", "Inverter", .001], ["gearbox_loss_w", "Gearbox", .001]]],
-    ["Pack current · A", [["battery_current_a", "Current"]]],
-    ["State of charge · %", [["soc", "SOC", 100]]]
-  ],
-  grip: [
-    ["Grip utilization · fraction", [["front_grip_usage", "Front"], ["rear_grip_usage", "Rear"]]],
-    ["Normal load · N", [["front_normal_n", "Front"], ["rear_normal_n", "Rear"]]],
-    ["Lateral force · N", [["front_fy_n", "Front"], ["rear_fy_n", "Rear"]]],
-    ["Slip angle · degrees", [["front_slip_rad", "Front", 180/Math.PI], ["rear_slip_rad", "Rear", 180/Math.PI]]]
-  ],
-  controls: [
-    ["Throttle · fraction", [["command_throttle", "Command"], ["throttle", "Actual"]]],
-    ["Brake · fraction", [["command_brake", "Command"], ["brake", "Actual"]]],
-    ["Steering · degrees", [["steer_target_rad", "Target", 180/Math.PI], ["steer_rad", "Actual", 180/Math.PI]]],
-    ["Motor torque · Nm", [["requested_drive_torque_nm", "Drive request"], ["motor_torque_nm", "Delivered"]]]
-  ]
-};
+const $=id=>document.getElementById(id);
+const palette=["#0067b1","#d14b16","#00844a","#9635a8","#af7800","#008b9b","#cb365b","#444444"];
+const storageKey="simlap.telemetry.layout.v1";
+let run=null, comparison=null, cursor=0, range=[0,1], selected=new Set(), activePlot="", views=[];
+let loadingVersion=0, compareVersion=0, playing=false, lastFrame=0, drawPending=false;
 
-function fmt(value, digits = 1) { return Number.isFinite(value) ? value.toFixed(digits) : "—"; }
-function el(tag, text, className) {
-  const node = document.createElement(tag);
-  if (text !== undefined) node.textContent = text;
-  if (className) node.className = className;
+function element(tag,text,className) {
+  const node=document.createElement(tag);
+  if (text!==undefined) node.textContent=text;
+  if (className) node.className=className;
   return node;
 }
-async function api(path) {
-  const response = await fetch(path);
-  if (!response.ok) throw new Error(`Could not load results (${response.status}). Check the dashboard server and refresh.`);
-  return response.json();
+function button(text,action,title=text) {const node=element("button",text);node.title=title;node.setAttribute("aria-label",title);node.onclick=action;return node;}
+function select(options,value,action,label) {
+  const node=element("select");
+  options.forEach(([key,text])=>node.add(new Option(text,key)));
+  node.value=value;node.onchange=()=>action(node.value);if(label)node.setAttribute("aria-label",label);return node;
 }
-function error(message) { $("notice").textContent = message; $("notice").hidden = false; }
+function check(checked,action,label) {const node=element("input");node.type="checkbox";node.checked=checked;node.onchange=()=>action(node.checked);node.setAttribute("aria-label",label);return node;}
+function label(text,node) {const result=element("label",text);result.append(node);return result;}
+function newPlot(title,channels=[],x="time_s") {
+  return {id:`p${Date.now()}${Math.random().toString(16).slice(2,7)}`,title,x,wide:false,equal:false,
+    series:channels.map((channel,i)=>({channel,color:palette[i%palette.length],axis:"left",visible:true}))};
+}
+function defaults() {
+  const battery=newPlot("Battery",["battery_current_a","battery_voltage_v"]);
+  battery.series[1].axis="right";
+  return {columns:2,plots:[newPlot("Speed",["speed_mps"]),newPlot("Acceleration",["ax_mps2","ay_mps2"]),
+    newPlot("Power",["battery_terminal_power_w","motor_shaft_power_w","wheel_drive_power_w"]),
+    battery]};
+}
+function readLayout() {
+  try {
+    const saved=JSON.parse(localStorage.getItem(storageKey));
+    if (!saved || ![1,2,3].includes(saved.columns) || !Array.isArray(saved.plots) || !saved.plots.length) return defaults();
+    if (new Set(saved.plots.map(p=>p.id)).size!==saved.plots.length) return defaults();
+    if (!saved.plots.every(p=>typeof p.id==="string"&&typeof p.title==="string"&&typeof p.x==="string"&&Array.isArray(p.series)&&
+      p.series.every(s=>typeof s.channel==="string"&&/^#[0-9a-f]{6}$/i.test(s.color)&&["left","right"].includes(s.axis)&&typeof s.visible==="boolean"))) return defaults();
+    return saved;
+  } catch {return defaults();}
+}
+let layout=readLayout();
+function saveLayout() {
+  try {localStorage.setItem(storageKey,JSON.stringify(layout));$("layout-status").textContent="Layout saved in this browser";}
+  catch {$("layout-status").textContent="Browser storage unavailable; layout is temporary";}
+}
+function message(text) {$("notice").textContent=text;$("notice").hidden=!text;}
+async function api(path) {const response=await fetch(path);if(!response.ok)throw new Error(`Request failed (${response.status}). Check the server and refresh.`);return response.json();}
+function duration() {return Math.max(run?.summary.duration_s || 0,comparison?.summary.duration_s || 0,.001);}
+function allChannels() {return [...new Set([...(run?.columns || []),...(comparison?.columns || [])])];}
+function filteredChannels() {const query=$("search").value.toLowerCase();return allChannels().filter(key=>key.toLowerCase().includes(query));}
 
 async function refresh() {
   try {
-    runs = await api("/api/runs");
-    $("runs").replaceChildren();
-    $("compare").replaceChildren(new Option("No comparison", ""));
-    runs.forEach(item => {
-      const button = el("button");
-      button.dataset.id = item.run_id;
-      button.append(el("strong", names[item.maneuver]), el("small", `${fmt(item.duration_s)} s · ${fmt(item.max_speed_kph)} km/h · ${item.run_id.slice(9,15)}`));
-      button.onclick = () => selectRun(item.run_id);
-      $("runs").append(button);
-      $("compare").add(new Option(`${names[item.maneuver]} · ${item.run_id.slice(0,15)}`, item.run_id));
-    });
-    if (!runs.length) {
-      run = null; playing = false; $("workspace").hidden = true;
-      error("No completed simulations yet. From the repository run: python -m simlap.run all, then refresh here.");
-    } else await selectRun(run && runs.some(r => r.run_id === run.summary.run_id) ? run.summary.run_id : runs[0].run_id);
-  } catch (err) { error(err.message); }
+    const runs=await api("/api/runs"), old=run?.summary.run_id;
+    $("run-select").replaceChildren();$("compare").replaceChildren(new Option("None",""));
+    runs.forEach(r=>{const name=`${r.maneuver} | ${r.run_id}`;$("run-select").add(new Option(name,r.run_id));$("compare").add(new Option(name,r.run_id));});
+    if (!runs.length) {run=null;playing=false;$("workspace").hidden=true;message("No completed runs. Execute python -m simlap.run all, then Refresh.");return;}
+    await selectRun(runs.some(r=>r.run_id===old)?old:runs[0].run_id);
+  } catch(error) {message(error.message);}
 }
-
 async function selectRun(id) {
-  const version = ++selectionVersion;
+  const version=++loadingVersion;++compareVersion;playing=false;$("play").textContent="Play";
+  message("Loading full-resolution telemetry…");
   try {
-    const data = await api(`/api/run?id=${encodeURIComponent(id)}`);
-    if (version !== selectionVersion) return;
-    run = data; comparison = null; $("compare").value = "";
-    fraction = 0; playing = false; $("play").textContent = "▶ Play";
-    $("notice").hidden = true; $("workspace").hidden = false;
-    document.querySelectorAll("nav button").forEach(b => b.classList.toggle("active", b.dataset.id === id));
-    const s = run.summary, c = run.config;
-    $("title").textContent = names[s.maneuver];
-    $("run-date").textContent = new Date(run.metadata.created_utc).toLocaleString();
-    $("subtitle").textContent = `${c.motor.peak_power_kw} kW peak motor · ${c.motor.rating} map · ${c.vehicle.mass_kg} kg including rider`;
-    $("status").textContent = s.reason.replaceAll("_", " ").toUpperCase();
-    $("status").classList.toggle("warning", !["stopped", "duration_completed"].includes(s.reason));
-    const special = s.maneuver === "acceleration" ? ["0–100 km/h", s.zero_to_100_s, "s"] :
-      s.maneuver === "braking" ? ["Stopping distance", s.stopping_distance_m, "m"] : ["Max radius error", s.max_radius_error_m, "m"];
-    $("summary").replaceChildren();
-    [["Maximum speed", s.max_speed_kph, "km/h"], special, ["Net pack energy", s.terminal_energy_wh, "Wh"], ["Duration", s.duration_s, "s"]].forEach(([label, value, unit]) => {
-      const card = el("div", undefined, "metric"), number = el("div", fmt(value, label.includes("radius") ? 4 : 2), "value");
-      number.append(el("small", unit)); card.append(el("div", label, "label"), number); $("summary").append(card);
-    });
-    $("config-strip").textContent = `${c.battery.capacity_kwh} kWh pack · ${c.battery.nominal_voltage_v} V nominal · μ ${c.tires.friction_coefficient} · Cd ${c.vehicle.drag_coefficient} · Δt ${c.simulation.dt_s * 1000} ms`;
-    $("config").textContent = JSON.stringify(c, null, 2);
-    $("checks").textContent = JSON.stringify(s, null, 2);
-    $("signal").replaceChildren();
-    run.columns.filter(key => run.rows.some(row => Number.isFinite(row[key]))).forEach(key => $("signal").add(new Option(key, key)));
-    $("signal").value = "battery_voltage_v";
+    const data=await api(`/api/run?id=${encodeURIComponent(id)}`);
+    if(version!==loadingVersion)return;
+    run=data;comparison=null;cursor=0;$("compare").value="";$("run-select").value=id;
+    $("workspace").hidden=false;selected.clear();message("");
+    const s=run.summary,c=run.config;
+    $("run-info").textContent=`${s.maneuver} | ${s.reason} | ${run.rows.length.toLocaleString()} samples, full resolution | ${s.duration_s.toFixed(3)} s | motor ${c.motor.rating}, ${c.motor.peak_power_kw} kW peak | mass ${c.vehicle.mass_kg} kg`;
+    $("config").textContent=JSON.stringify(c,null,2);$("checks").textContent=JSON.stringify(s,null,2);
     $("downloads").replaceChildren();
-    ["telemetry.csv", "engine.log", "config.json", "metadata.json", "summary.json", "channels.json"].forEach(name => {
-      const link = el("a", `↓ ${name}`); link.href = `/api/file?id=${encodeURIComponent(id)}&name=${name}`; link.download = name; $("downloads").append(link);
+    ["telemetry.csv","engine.log","config.json","metadata.json","summary.json","channels.json"].forEach(name=>{
+      const link=element("a",name);link.href=`/api/file?id=${encodeURIComponent(id)}&name=${name}`;link.download=name;$("downloads").append(link);
     });
-    buildCharts(); draw();
-  } catch (err) { error(err.message); }
+    fitRange();renderChannels();renderPlots();
+  }catch(error){if(version===loadingVersion)message(error.message);}
 }
-
-function canvasContext(canvas) {
-  const rect = canvas.getBoundingClientRect(), ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.round(rect.width * ratio); canvas.height = Math.round(rect.height * ratio);
-  const ctx = canvas.getContext("2d"); ctx.scale(ratio, ratio);
-  ctx.font = "10px -apple-system, sans-serif";
-  return [ctx, rect.width, rect.height];
+function renderChannels() {
+  $("channel-count").textContent=`${allChannels().length} logged`;
+  $("channels").replaceChildren();
+  filteredChannels().forEach(key=>{
+    const populated=[run,comparison].filter(Boolean).some(data=>data.rows.some(row=>Number.isFinite(row[key])));
+    const row=element("label",undefined,`channel${populated?"":" channel-empty"}`);
+    row.title=run?.channel_descriptions?.[key] || key;
+    const box=check(selected.has(key),value=>{value?selected.add(key):selected.delete(key);updateSelection();},`Select ${key}`);
+    row.append(box,element("span",key,"channel-name"),element("span",populated?channelUnit(key):"no data","channel-unit"));
+    row.ondblclick=event=>{event.preventDefault();addChannels([key]);};$("channels").append(row);
+  });updateSelection();
 }
-function buildCharts() {
-  $("charts").replaceChildren();
-  views[$("view").value].forEach(([title, series]) => {
-    const box = el("div"), canvas = el("canvas", undefined, "chart"), legend = el("div", undefined, "legend");
-    canvas.setAttribute("role", "img"); canvas.setAttribute("aria-label", title);
-    box.append(el("div", title, "chart-title"), canvas, legend);
-    series.forEach(([,label], i) => { const item = el("span", label), line = el("i"); line.style.background = colors[i]; item.prepend(line); legend.append(item); });
-    canvas.onclick = event => scrubChart(event, canvas);
-    $("charts").append(box);
+function updateSelection() {$("add-channels").textContent=`Add selected (${selected.size})`;$("add-channels").disabled=!selected.size;}
+function setActive(id) {
+  activePlot=id;$("target-plot").value=id;
+  views.forEach(v=>v.root.classList.toggle("active",v.plot.id===id));
+}
+function addChannels(channels) {
+  const plot=layout.plots.find(p=>p.id===$("target-plot").value) || layout.plots[0];
+  channels.forEach(channel=>{if(!plot.series.some(s=>s.channel===channel))plot.series.push({channel,color:palette[plot.series.length%palette.length],axis:"left",visible:true});});
+  activePlot=plot.id;saveLayout();renderPlots();
+}
+function renderPlots() {
+  views=[];$("plots").replaceChildren();$("plots").style.setProperty("--columns",layout.columns);$("columns").value=layout.columns;
+  $("target-plot").replaceChildren(...layout.plots.map((p,i)=>new Option(`${i+1}: ${p.title}`,p.id)));
+  layout.plots.forEach((plot,index)=>{
+    const root=element("section",undefined,`plot${plot.wide?" wide":""}`),head=element("div",undefined,"plot-head");
+    root.dataset.plotId=plot.id;root.onpointerdown=()=>setActive(plot.id);
+    const title=element("input",undefined,"plot-title");title.value=plot.title;title.setAttribute("aria-label",`Plot ${index+1} title`);
+    title.onchange=()=>{plot.title=title.value;saveLayout();renderPlots();};
+    const move=offset=>{const other=index+offset;[layout.plots[index],layout.plots[other]]=[layout.plots[other],layout.plots[index]];saveLayout();renderPlots();};
+    const up=button("↑",()=>move(-1),"Move plot earlier"),down=button("↓",()=>move(1),"Move plot later");up.disabled=index===0;down.disabled=index===layout.plots.length-1;
+    const remove=button("×",()=>{layout.plots.splice(index,1);if(!layout.plots.length)layout.plots.push(newPlot("Plot"));saveLayout();renderPlots();},"Remove plot");
+    head.append(element("span",`P${index+1}`,"plot-number"),title,up,down,remove);
+    const settings=element("div",undefined,"plot-settings");
+    const channels=[...new Set([...allChannels(),plot.x])];
+    settings.append(label("X",select(channels.map(key=>[key,`${key} [${channelUnit(key)}]`]),plot.x,value=>{plot.x=value;saveLayout();requestDraw();},"X-axis channel")),
+      label("Full width",check(plot.wide,value=>{plot.wide=value;saveLayout();renderPlots();},"Full-width plot")),
+      label("Equal XY",check(plot.equal,value=>{plot.equal=value;saveLayout();requestDraw();},"Equal X and Y scale")));
+    const canvas=element("canvas");canvas.setAttribute("role","img");canvas.setAttribute("aria-label",`${plot.title} telemetry plot`);
+    const legend=element("div",undefined,"legend"),table=element("table"),header=element("tr");
+    ["Show","Color","Channel [unit]","Axis","Selected ━",...(comparison?["Compare ┄"]:[]),"Move to",""].forEach(text=>header.append(element("th",text)));table.append(header);
+    const values=[];
+    plot.series.forEach((s,seriesIndex)=>{
+      const row=element("tr");
+      const cell=node=>{const td=element("td");td.append(node);row.append(td);return td;};
+      cell(check(s.visible,value=>{s.visible=value;saveLayout();requestDraw();},`Show ${s.channel}`));
+      const color=element("input");color.type="color";color.value=s.color;color.setAttribute("aria-label",`Color for ${s.channel}`);
+      color.oninput=()=>{s.color=color.value;saveLayout();requestDraw();};cell(color);
+      const name=element("span",`${s.channel} [${channelUnit(s.channel)}]`);name.title=name.textContent;cell(name).className="trace-name";
+      cell(select([["left","L"],["right","R"]],s.axis,value=>{s.axis=value;saveLayout();requestDraw();},`Axis for ${s.channel}`));
+      const current=cell(element("span"));current.className="value";
+      const compare=comparison?cell(element("span")):null;if(compare)compare.className="value";
+      values.push({series:s,current,compare,name});
+      cell(select(layout.plots.map((p,i)=>[p.id,`P${i+1}: ${p.title}`]),plot.id,id=>{
+        if(id===plot.id)return;const destination=layout.plots.find(p=>p.id===id);
+        if(!destination.series.some(item=>item.channel===s.channel))destination.series.push({...s});
+        plot.series.splice(seriesIndex,1);activePlot=id;saveLayout();renderPlots();
+      },`Move ${s.channel} to plot`));
+      cell(button("×",()=>{plot.series.splice(seriesIndex,1);saveLayout();renderPlots();},`Remove ${s.channel}`));table.append(row);
+    });
+    legend.append(table);const note=element("div",undefined,"plot-note");root.append(head,settings,canvas,legend,note);$("plots").append(root);
+    views.push({root,canvas,plot,values,note});attachPlotEvents(canvas,plot);
+  });
+  setActive(layout.plots.some(p=>p.id===activePlot)?activePlot:layout.plots[0].id);requestDraw();
+}
+function setRange(start,end) {
+  if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start||end>duration()+1e-8){message("Enter a valid time range within the loaded runs.");return;}
+  range=[start,end];cursor=Math.max(start,Math.min(end,cursor));$("time-start").value=Number(start.toFixed(6));$("time-end").value=Number(end.toFixed(6));message("");requestDraw();
+}
+function fitRange() {setRange(0,duration());}
+function attachPlotEvents(canvas,plot) {
+  let dragStart=null;
+  const xValue=event=>{const g=canvas.plotGeometry;if(!g)return 0;const px=event.clientX-canvas.getBoundingClientRect().left;return g.xr[0]+Math.max(0,Math.min(1,(px-g.area.left)/(g.area.right-g.area.left)))*(g.xr[1]-g.xr[0]);};
+  canvas.onpointerdown=event=>{dragStart={x:event.clientX,value:xValue(event)};canvas.setPointerCapture(event.pointerId);};
+  canvas.onpointerup=event=>{
+    if(!dragStart)return;
+    const end=xValue(event);
+    if(plot.x==="time_s"&&Math.abs(event.clientX-dragStart.x)>6)setRange(Math.min(dragStart.value,end),Math.max(dragStart.value,end));
+    else if(plot.x==="time_s"){cursor=Math.max(range[0],Math.min(range[1],end));requestDraw();}
+    else {
+      const rows=canvas.plotGeometry.samples.filter(row=>Number.isFinite(row[plot.x]));
+      const nearest=rows.reduce((best,row)=>!best||Math.abs(row[plot.x]-end)<Math.abs(best[plot.x]-end)?row:best,null);
+      if(nearest){cursor=nearest.time_s;requestDraw();}
+    }
+    dragStart=null;
+  };
+  canvas.onpointercancel=()=>{dragStart=null;};canvas.ondblclick=fitRange;
+}
+function requestDraw() {if(!drawPending){drawPending=true;requestAnimationFrame(()=>{drawPending=false;draw();});}}
+function draw() {
+  if(!run)return;
+  $("cursor-time").textContent=`${cursor.toFixed(4)} s`;$("scrub").value=Math.round((cursor-range[0])/(range[1]-range[0])*1000);
+  const current=nearestSample(run.rows,cursor),other=comparison?nearestSample(comparison.rows,cursor):null;
+  views.forEach(view=>{
+    view.note.textContent=drawTelemetryPlot(view.canvas,view.plot,[run,comparison].filter(Boolean),range,cursor);
+    view.values.forEach(({series,current:cell,compare,name})=>{
+      cell.textContent=formatNumber(current?.[series.channel]);if(compare)compare.textContent=formatNumber(other?.[series.channel]);
+      name.style.color=series.color;name.style.opacity=series.visible?"1":"0.45";
+    });
   });
 }
-function scrubChart(event, canvas) {
-  if (!run) return;
-  const duration = Math.max(run.summary.duration_s, comparison?.summary.duration_s || 0, .001);
-  fraction = Math.max(0, Math.min(1, (event.clientX - canvas.getBoundingClientRect().left - 48) / (canvas.clientWidth - 62) * duration / Math.max(run.summary.duration_s, .001)));
-  draw();
+$("refresh").onclick=refresh;$("run-select").onchange=()=>selectRun($("run-select").value);
+$("compare").onchange=async()=>{
+  const id=$("compare").value,version=++compareVersion,runVersion=loadingVersion;
+  try {const data=id?await api(`/api/run?id=${encodeURIComponent(id)}`):null;if(version!==compareVersion||runVersion!==loadingVersion)return;
+    comparison=data;fitRange();renderChannels();renderPlots();
+  }catch(error){if(version===compareVersion)message(error.message);}
+};
+$("search").oninput=renderChannels;
+$("select-filtered").onclick=()=>{filteredChannels().forEach(key=>selected.add(key));renderChannels();};
+$("clear-selection").onclick=()=>{selected.clear();renderChannels();};
+$("add-channels").onclick=()=>addChannels([...selected]);$("target-plot").onchange=()=>setActive($("target-plot").value);
+$("add-plot").onclick=()=>{const plot=newPlot(`Plot ${layout.plots.length+1}`);layout.plots.push(plot);activePlot=plot.id;saveLayout();renderPlots();};
+$("columns").onchange=()=>{layout.columns=Number($("columns").value);saveLayout();renderPlots();};
+$("reset-layout").onclick=()=>{layout=defaults();saveLayout();renderPlots();};
+$("apply-range").onclick=()=>setRange(Number($("time-start").value),Number($("time-end").value));$("fit-range").onclick=fitRange;
+$("scrub").oninput=()=>{cursor=range[0]+Number($("scrub").value)/1000*(range[1]-range[0]);requestDraw();};
+$("play").onclick=()=>{playing=!playing;if(playing&&cursor>=range[1])cursor=range[0];lastFrame=0;$("play").textContent=playing?"Pause":"Play";};
+window.addEventListener("resize",requestDraw);
+function animate(now) {
+  if(playing&&run){if(lastFrame)cursor=Math.min(range[1],cursor+(now-lastFrame)/1000);lastFrame=now;requestDraw();if(cursor>=range[1]){playing=false;$("play").textContent="Play";}}
+  requestAnimationFrame(animate);
 }
-function chart(canvas, series) {
-  const [ctx, width, height] = canvasContext(canvas), left = 48, right = width - 14, top = 14, bottom = height - 28;
-  const duration = Math.max(run.summary.duration_s, comparison?.summary.duration_s || 0, .001);
-  let min = Infinity, max = -Infinity;
-  [run, comparison].filter(Boolean).forEach(data => data.rows.forEach(row => series.forEach(([key,,scale=1]) => {
-    if (Number.isFinite(row[key])) { min = Math.min(min, row[key] * scale); max = Math.max(max, row[key] * scale); }
-  })));
-  if (!Number.isFinite(min)) return;
-  const pad = Math.max((max - min) * .13, Math.abs(max) * .01, 1e-4); min -= pad; max += pad;
-  const x = t => left + t / duration * (right - left), y = v => bottom - (v - min) / (max - min) * (bottom - top);
-  ctx.lineWidth = 1; ctx.fillStyle = "#748079";
-  for (let i=0;i<=4;i++) {
-    const value = min + i * (max-min)/4, py = y(value);
-    ctx.strokeStyle = "#e9eae4"; ctx.beginPath(); ctx.moveTo(left,py); ctx.lineTo(right,py); ctx.stroke();
-    ctx.textAlign = "right"; ctx.fillText(Math.abs(value) >= 10000 ? value.toExponential(1) : fmt(value, Math.abs(max-min)<1 ? 3 : 1), left-7, py+3);
-    ctx.textAlign = "center"; ctx.fillText(fmt(duration*i/4,1), x(duration*i/4),height-9);
-  }
-  [run, comparison].filter(Boolean).forEach((data, compareIndex) => series.forEach(([key,,scale=1], index) => {
-    ctx.strokeStyle = colors[index]; ctx.lineWidth = compareIndex ? 1.5 : 2; ctx.globalAlpha = compareIndex ? .6 : 1; ctx.setLineDash(compareIndex ? [5,4] : []); ctx.beginPath();
-    let started = false;
-    data.rows.forEach(row => { if (!Number.isFinite(row[key])) { started = false; return; } const px=x(row.time_s),py=y(row[key]*scale); if(started) ctx.lineTo(px,py); else ctx.moveTo(px,py); started=true; });
-    ctx.stroke();
-  }));
-  ctx.globalAlpha=1; ctx.setLineDash([3,4]); ctx.strokeStyle="#9aa59d"; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(x(fraction*run.summary.duration_s),top);ctx.lineTo(x(fraction*run.summary.duration_s),bottom);ctx.stroke(); ctx.setLineDash([]);
-}
-function currentRow() {
-  const t = fraction * run.summary.duration_s;
-  let lo=0, hi=run.rows.length-1;
-  while(lo<hi) { const mid=Math.floor((lo+hi)/2); if(run.rows[mid].time_s<t) lo=mid+1;else hi=mid; }
-  return run.rows[lo];
-}
-function drawPath(row) {
-  const [ctx,w,h] = canvasContext($("path")), rows=run.rows;
-  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
-  rows.forEach(p=>{minX=Math.min(minX,p.x_m);maxX=Math.max(maxX,p.x_m);minY=Math.min(minY,p.y_m);maxY=Math.max(maxY,p.y_m);});
-  const radius = run.metadata.parameters.radius_m;
-  if(radius) { minX=Math.min(minX,-Math.abs(radius));maxX=Math.max(maxX,Math.abs(radius));minY=Math.min(minY,radius-Math.abs(radius));maxY=Math.max(maxY,radius+Math.abs(radius)); }
-  const scale=Math.min((w-60)/Math.max(maxX-minX,5),(h-55)/Math.max(maxY-minY,5));
-  const x=v=>w/2+(v-(minX+maxX)/2)*scale,y=v=>h/2-(v-(minY+maxY)/2)*scale;
-  ctx.strokeStyle="#e5e8df";ctx.lineWidth=1;
-  for(let i=1;i<8;i++){ctx.beginPath();ctx.moveTo(w*i/8,0);ctx.lineTo(w*i/8,h);ctx.stroke();ctx.beginPath();ctx.moveTo(0,h*i/8);ctx.lineTo(w,h*i/8);ctx.stroke();}
-  if(radius){ctx.strokeStyle="#a4afa1";ctx.setLineDash([5,5]);ctx.beginPath();ctx.arc(x(0),y(radius),Math.abs(radius)*scale,0,2*Math.PI);ctx.stroke();ctx.setLineDash([]);}
-  ctx.strokeStyle="#c7d7c8";ctx.lineWidth=3;ctx.beginPath();rows.forEach((p,i)=>i?ctx.lineTo(x(p.x_m),y(p.y_m)):ctx.moveTo(x(p.x_m),y(p.y_m)));ctx.stroke();
-  ctx.strokeStyle=colors[0];ctx.beginPath();rows.filter(p=>p.time_s<=row.time_s).forEach((p,i)=>i?ctx.lineTo(x(p.x_m),y(p.y_m)):ctx.moveTo(x(p.x_m),y(p.y_m)));ctx.stroke();
-  ctx.save();ctx.translate(x(row.x_m),y(row.y_m));ctx.rotate(-row.heading_rad);ctx.fillStyle=colors[1];ctx.beginPath();ctx.moveTo(10,0);ctx.lineTo(-6,-5);ctx.lineTo(-3,0);ctx.lineTo(-6,5);ctx.closePath();ctx.fill();ctx.restore();
-  const bar=Math.max(1,10**Math.floor(Math.log10((w/5)/scale)));
-  ctx.strokeStyle="#748079";ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(16,h-20);ctx.lineTo(16+bar*scale,h-20);ctx.stroke();ctx.fillStyle="#748079";ctx.fillText(`${bar} m`,16,h-29);
-  ctx.textAlign="right";ctx.fillText(`x ${fmt(row.x_m)} m  /  y ${fmt(row.y_m)} m`,w-14,h-13);
-}
-function draw() {
-  if(!run) return;
-  const row=currentRow();$("scrub").value=Math.round(fraction*1000);$("time").textContent=`${fmt(row.time_s,2)} s`;
-  drawPath(row);
-  $("instant").replaceChildren();
-  [["SPEED",`${fmt(row.speed_mps*3.6)} km/h`],["LEAN ESTIMATE",`${fmt(row.lean_estimate_deg)}°`],["PACK SOC",`${fmt(row.soc*100,2)}%`]].forEach(([label,value])=>{const item=el("div");item.append(el("span",label),el("b",value));$("instant").append(item);});
-  $("energy").replaceChildren();
-  [["Battery terminal",row.battery_terminal_power_w],["Motor shaft",row.motor_shaft_power_w],["At rear wheel",row.wheel_drive_power_w],["Battery heat",row.battery_loss_w],["Motor + inverter heat",row.motor_loss_w+row.inverter_loss_w],["Friction brake heat",row.friction_brake_loss_w]].forEach(([label,value],i)=>{const item=el("div",undefined,`energy-row${i===0?" main":""}`);item.append(el("span",label),el("b",fmt(value/1000,2)));$("energy").append(item);});
-  $("charts").querySelectorAll("canvas").forEach((canvas,i)=>chart(canvas,views[$("view").value][i][1]));
-  chart($("raw-chart"),[[$("signal").value,$("signal").value]]);
-}
-$("refresh").onclick=refresh;
-$("view").onchange=()=>{buildCharts();draw();};
-$("signal").onchange=draw;
-$("raw-chart").onclick=event=>scrubChart(event,$("raw-chart"));
-$("scrub").oninput=()=>{fraction=Number($("scrub").value)/1000;draw();};
-$("compare").onchange=async()=>{const id=$("compare").value,version=selectionVersion;try{const data=id?await api(`/api/run?id=${encodeURIComponent(id)}`):null;if(version===selectionVersion&&$("compare").value===id){comparison=data;draw();}}catch(err){error(err.message);}};
-$("play").onclick=()=>{playing=!playing;if(playing&&fraction>=1)fraction=0;lastFrame=0;$("play").textContent=playing?"Ⅱ Pause":"▶ Play";};
-window.addEventListener("resize",draw);
-function animate(now){if(playing&&run){if(lastFrame)fraction=Math.min(1,fraction+(now-lastFrame)/1000/Math.max(run.summary.duration_s,.001));lastFrame=now;draw();if(fraction>=1){playing=false;$("play").textContent="▶ Play";}}requestAnimationFrame(animate);}
-requestAnimationFrame(animate);
-refresh();
+requestAnimationFrame(animate);refresh();

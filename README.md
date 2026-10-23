@@ -8,7 +8,17 @@ python3 -m venv .venv
 .venv/bin/python -m simlap.dashboard
 ```
 
-Open **http://127.0.0.1:8000**. The dashboard reads completed runs from `results/`; use Refresh after running another simulation. It provides trajectory playback, time-series comparison, every recorded signal, resolved parameters, and downloads. It has no external assets, CDN, or Python dependencies.
+Open **http://127.0.0.1:8000**. The dashboard reads completed runs from `results/`; use Refresh after running another simulation. It plots full-resolution CSV telemetry in configurable panels. It has no external assets, CDN, or Python dependencies.
+
+### Telemetry workspace
+
+- Filter the channel list, select channels, choose a destination plot, and click **Add selected**. Double-click a channel to add it directly. All logged channels are listed, including channels with no numeric samples.
+- Use **+ Plot** to create panels. Rename them, move them up/down, choose 1–3 columns, or make a panel full width. Narrow screens stack panels automatically.
+- Each plot's legend controls trace visibility, color, left/right Y axis, destination panel, and removal. It shows values at the shared cursor. Units are displayed from channel suffixes; unknown units are marked `—`. Mixed units on one Y axis are explicitly flagged.
+- Choose any logged **X** channel. For a trajectory, use `x_m` as X, add `y_m`, and enable **Equal XY**. Equal scaling requires matching axis units and no right-axis traces.
+- Click a time plot to position the shared cursor. Drag horizontally to zoom, double-click to fit, or set the time interval numerically. Playback and the slider use the same cursor. XY clicks select the sample nearest the clicked X value; repeated X values can be ambiguous.
+- Select a comparison run for dashed overlays; solid lines are the selected run. Runs align at simulation time zero. Separate legend columns show the nearest sample for each run, or `—` outside its time span.
+- Layout, channel assignments, axes, colors, visibility and panel order are saved in browser storage. **Reset layout** restores defaults. Full CSV data is loaded into browser memory; very long runs may require a future windowed-data backend.
 
 Individual entry points:
 
@@ -94,7 +104,7 @@ Every run gets a unique directory under `results/`:
 | `metadata.json` | Maneuver parameters, timestamps, Python/platform, Git commit if available, source-file hashes and config hash |
 | `summary.json` | Full-resolution performance metrics and numerical checks |
 | `channels.json` | Signal conventions and units |
-| `dashboard.json` | Sampled display data plus metadata/config; never replaces full CSV |
+| `dashboard.json` | Sampled preview plus metadata/config; the telemetry server replaces its preview rows with full CSV data |
 
 Physics signals in a row are evaluated at that row's timestamp. `ax_mps2` and `ay_mps2` are force/mass accelerations, **not** derivatives of the rotating-frame velocity components; both derivatives are also logged. Energy counters use RK4 stage values. `step_cpu_ms` measures elapsed compute time for integration and endpoint evaluation, excluding log I/O. DEBUG records accepted steps, not every intermediate RK stage. Failed simulations retain their CSV and traceback; only completed artifact sets appear in the dashboard.
 

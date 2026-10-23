@@ -1,6 +1,7 @@
 """Read-only local dashboard; serves completed runs and exact downloadable logs."""
 
 import argparse
+import csv
 import json
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -10,6 +11,18 @@ from urllib.parse import parse_qs, urlparse
 from .config import ROOT
 
 DOWNLOADS = {"telemetry.csv", "engine.log", "config.json", "metadata.json", "summary.json", "channels.json"}
+
+
+def read_run(directory):
+    """Use the recorded CSV, not the downsampled preview, for engineering plots."""
+    data = json.loads((directory / "dashboard.json").read_text())
+    with (directory / "telemetry.csv").open(newline="") as stream:
+        reader = csv.DictReader(stream)
+        data["columns"] = reader.fieldnames
+        data["rows"] = [{key: float(value) if value else None for key, value in row.items()} for row in reader]
+    descriptions = directory / "channels.json"
+    data["channel_descriptions"] = json.loads(descriptions.read_text()) if descriptions.exists() else {}
+    return data
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -37,7 +50,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not run_id or run.parent != self.results:
                 return self.send_error(400, "Invalid run ID")
             if url.path == "/api/run":
-                return self.send_data((run / "dashboard.json").read_bytes(), "application/json")
+                return self.send_data(json.dumps(read_run(run), allow_nan=False).encode(), "application/json")
             if url.path == "/api/file":
                 name = query.get("name", [""])[0]
                 if name not in DOWNLOADS:

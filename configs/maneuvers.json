@@ -1,0 +1,5 @@
+{
+  "acceleration": {"duration_s": 20.0, "initial_speed_mps": 0.0, "throttle": 1.0},
+  "braking": {"duration_s": 15.0, "initial_speed_mps": 27.7777777778, "brake": 1.0},
+  "cornering": {"duration_s": 20.0, "speed_mps": 15.0, "radius_m": 50.0, "trim_tolerance": 0.000001, "trim_iterations": 30}
+}

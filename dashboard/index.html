@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SimLap · Motorcycle lab</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <aside>
+    <a class="brand" href="/">S<span>↗</span> <b>SIMLAP</b></a>
+    <div class="eyebrow">ELECTRIC MOTORCYCLE LAB</div>
+    <div class="sidebar-heading"><h2>Simulation runs</h2><button id="refresh" title="Refresh runs" aria-label="Refresh runs">↻</button></div>
+    <nav id="runs" aria-label="Simulation runs"></nav>
+    <div class="sidebar-note"><span class="dot"></span> Local physics workspace<br><small>Full-resolution logs stay on disk.</small></div>
+  </aside>
+  <main>
+    <header><div><div class="eyebrow">MANEUVER ANALYSIS / <span id="run-date">—</span></div><h1 id="title">Your motorcycle, in motion.</h1><p id="subtitle">Choose a simulation to explore its dynamics and energy flow.</p></div><span class="badge" id="status">READY</span></header>
+    <div id="notice" role="status">Loading simulations…</div>
+    <div id="workspace" hidden>
+      <section id="summary" class="metrics" aria-label="Run summary"></section>
+      <div class="analysis-grid">
+        <section class="panel path-panel">
+          <div class="panel-heading"><div><div class="eyebrow">01 / MANEUVER</div><h2>Ground trajectory</h2></div><span class="unit">METERS · EQUAL SCALE</span></div>
+          <canvas id="path" aria-label="Motorcycle ground trajectory and playback position" role="img"></canvas>
+          <div class="playback"><button id="play" aria-label="Play or pause maneuver">▶ Play</button><input id="scrub" aria-label="Simulation playback time" type="range" min="0" max="1000" value="0"><output id="time">0.00 s</output></div>
+          <div id="instant" class="instant"></div>
+        </section>
+        <section class="panel vehicle-panel">
+          <div class="panel-heading"><div><div class="eyebrow">02 / POWERTRAIN</div><h2>Energy at this instant</h2></div><span class="unit">kW</span></div>
+          <div id="energy"></div>
+          <div class="model-note"><b>Planar 3 DOF</b><p>Longitudinal, lateral and yaw motion. Lean is an equilibrium estimate. Positive pack power means discharge; negative means charging.</p></div>
+          <div id="config-strip"></div>
+        </section>
+      </div>
+      <section class="panel telemetry-panel">
+        <div class="panel-heading"><div><div class="eyebrow">03 / TELEMETRY</div><h2>Through the maneuver</h2></div><div class="selectors"><label>View<select id="view"><option value="motion">Motion</option><option value="power">Power & energy</option><option value="grip">Tires & balance</option><option value="controls">Control inputs</option></select></label><label>Compare<select id="compare"><option value="">No comparison</option></select></label></div></div>
+        <div id="charts" class="charts"></div><p class="hint">Click a chart to move the playback cursor. Dashed traces show the comparison run. Display data is sampled; CSV contains every physics step.</p>
+      </section>
+      <section class="panel inspect-panel">
+        <div class="panel-heading"><div><div class="eyebrow">04 / INSPECT</div><h2>Every signal, every step</h2></div><label>Signal<select id="signal"></select></label></div>
+        <canvas id="raw-chart" class="chart" role="img" aria-label="Selected telemetry signal over time"></canvas>
+        <div class="downloads" id="downloads"></div>
+        <details><summary>Resolved vehicle configuration</summary><pre id="config"></pre></details>
+        <details><summary>Run metrics & numerical checks</summary><pre id="checks"></pre></details>
+      </section>
+      <footer>SIMLAP / PHYSICS FIRST <span>Assumed parameters · replace with measured maps for calibration</span></footer>
+    </div>
+  </main>
+</body>
+</html>

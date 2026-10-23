@@ -1,0 +1,71 @@
+{
+  "vehicle": {
+    "mass_kg": 250.0,
+    "yaw_inertia_kgm2": 95.0,
+    "front_distance_m": 0.75,
+    "rear_distance_m": 0.70,
+    "cg_height_m": 0.55,
+    "wheel_radius_m": 0.30,
+    "drag_coefficient": 0.60,
+    "frontal_area_m2": 0.60,
+    "rolling_resistance": 0.015,
+    "max_lean_deg": 55.0
+  },
+  "environment": {"gravity_mps2": 9.81, "air_density_kgpm3": 1.225, "headwind_mps": 0.0},
+  "tires": {"friction_coefficient": 1.1, "front_stiffness_nprad": 22000.0, "rear_stiffness_nprad": 25000.0, "slip_regularization_mps": 2.0},
+  "motor": {
+    "peak_power_kw": 48.0,
+    "nominal_factor": 0.75,
+    "rating": "peak",
+    "map_rpm": [0, 1500, 3000, 4500, 6000, 7500, 9000],
+    "map_power_fraction": [0, 0.49, 0.92, 1.0, 1.0, 0.875, 0],
+    "max_torque_nm": 150.0,
+    "gear_ratio": 5.0,
+    "gear_efficiency": 0.97,
+    "copper_loss_w_per_nm2": 0.025,
+    "iron_loss_w_per_radps2": 0.0005,
+    "idle_loss_w": 20.0,
+    "regen_max_torque_nm": 65.0,
+    "regen_max_power_kw": 20.0,
+    "regen_full_speed_mps": 3.0
+  },
+  "inverter": {"efficiency": 0.97, "idle_loss_w": 30.0},
+  "battery": {
+    "capacity_kwh": 8.0,
+    "nominal_voltage_v": 120.0,
+    "resistance_ohm": 0.035,
+    "ocv_soc": [0.0, 0.1, 0.5, 0.9, 1.0],
+    "ocv_voltage_v": [96.0, 108.0, 120.0, 132.0, 136.0],
+    "max_discharge_a": 500.0,
+    "max_charge_a": 180.0,
+    "min_voltage_v": 90.0,
+    "max_voltage_v": 140.0,
+    "min_soc": 0.05,
+    "max_soc": 0.98,
+    "initial_soc": 0.90,
+    "auxiliary_power_w": 100.0
+  },
+  "actuators": {
+    "max_steer_deg": 30.0,
+    "steer_rate_degps": 90.0,
+    "steer_time_constant_s": 0.08,
+    "throttle_time_constant_s": 0.08,
+    "brake_time_constant_s": 0.05,
+    "brake_regularization_mps": 0.10,
+    "max_brake_force_n": 3800.0,
+    "front_brake_fraction": 0.82,
+    "regen_enabled": true,
+    "yaw_rate_gain_s": 0.20,
+    "yaw_rate_max_radps": 1.5,
+    "yaw_rate_min_speed_mps": 2.0
+  },
+  "simulation": {
+    "dt_s": 0.005,
+    "control_dt_s": 0.05,
+    "load_transfer_iterations": 40,
+    "load_transfer_tolerance_n": 0.1,
+    "stop_speed_mps": 0.05,
+    "log_level": "DEBUG",
+    "dashboard_max_points": 2000
+  }
+}

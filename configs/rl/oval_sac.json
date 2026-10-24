@@ -1,0 +1,52 @@
+{
+  "seed": 7,
+  "total_timesteps": 200000,
+  "environment": {
+    "max_episode_s": 90.0,
+    "initial_speed_mps": [3.0, 8.0],
+    "random_start": true,
+    "initial_lateral_m": 0.20,
+    "initial_heading_rad": 0.03,
+    "vehicle_half_width_m": 0.40,
+    "boundary_margin_m": 0.15,
+    "stall_timeout_s": 6.0,
+    "stall_speed_mps": 0.5,
+    "backward_limit_m": 5.0,
+    "preview_distances_m": [5.0, 10.0, 20.0, 40.0, 80.0],
+    "speed_scale_mps": 50.0,
+    "lateral_speed_scale_mps": 10.0,
+    "yaw_rate_scale_radps": 2.0,
+    "curvature_scale_m": 30.0,
+    "max_policy_steer_deg": 12.0
+  },
+  "reward": {
+    "progress_per_m": 0.5,
+    "time_per_s": 1.0,
+    "action_change": 0.02,
+    "edge_per_s": 0.5,
+    "edge_start_fraction": 0.75,
+    "failure": 150.0,
+    "lap_completed": 200.0
+  },
+  "sac": {
+    "learning_rate": 0.0003,
+    "buffer_size": 200000,
+    "learning_starts": 2000,
+    "batch_size": 256,
+    "gamma": 0.999,
+    "tau": 0.005,
+    "train_freq": 1,
+    "gradient_steps": 1,
+    "ent_coef": "auto_0.1",
+    "net_arch": [128, 128],
+    "device": "cpu",
+    "torch_threads": 1
+  },
+  "logging": {
+    "eval_every_steps": 10000,
+    "eval_episodes": 3,
+    "checkpoint_every_steps": 10000,
+    "save_replay_buffer": true,
+    "console_every_steps": 1000
+  }
+}

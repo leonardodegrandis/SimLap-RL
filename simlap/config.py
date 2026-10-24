@@ -2,7 +2,7 @@
 
 import json
 import math
-from dataclasses import asdict, dataclass, fields
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from pathlib import Path
 from typing import get_type_hints
 
@@ -104,6 +104,31 @@ class Simulation:
     stop_speed_mps: float
     log_level: str
     dashboard_max_points: int
+    integrator: str = "rk4"
+    relative_tolerance: float = 1e-6
+    absolute_tolerance: float = 1e-8
+    max_internal_step_s: float = 0.005
+    min_internal_step_s: float = 1e-8
+    max_internal_steps: int = 10000
+
+
+@dataclass(frozen=True)
+class Dynamics:
+    model: str = "planar"
+    roll_inertia_kgm2: float = 30.0
+    pitch_inertia_kgm2: float = 70.0
+    roll_damping_nmsprad: float = 4.0
+    front_spring_npm: float = 30000.0
+    rear_spring_npm: float = 35000.0
+    front_damper_nspm: float = 1800.0
+    rear_damper_nspm: float = 2000.0
+    front_wheel_inertia_kgm2: float = 0.60
+    rear_wheel_inertia_kgm2: float = 0.80
+    motor_inertia_kgm2: float = 0.02
+    front_longitudinal_stiffness_n: float = 18000.0
+    rear_longitudinal_stiffness_n: float = 20000.0
+    max_pitch_deg: float = 12.0
+    max_suspension_displacement_m: float = 0.12
 
 
 @dataclass(frozen=True)
@@ -116,6 +141,7 @@ class Config:
     battery: Battery
     actuators: Actuators
     simulation: Simulation
+    dynamics: Dynamics = field(default_factory=Dynamics)
 
     def to_dict(self):
         return asdict(self)
@@ -135,10 +161,16 @@ def merge(base, overlay):
 def load_config(path=None, overlays=()):
     with open(path or ROOT / "configs/motorcycle.json") as stream:
         raw = json.load(stream)
+    # Old planar checkpoints predate model selection and integrator settings.
+    raw.setdefault("dynamics", {})
+    types = get_type_hints(Config)
+    for key, cls in types.items():
+        for item in fields(cls):
+            if item.default is not MISSING:
+                raw.setdefault(key, {}).setdefault(item.name, item.default)
     for overlay in overlays:
         with open(overlay) as stream:
             merge(raw, json.load(stream))
-    types = get_type_hints(Config)
     if set(raw) != set(types):
         raise ValueError("Config must contain exactly: " + ", ".join(types))
     try:
@@ -159,7 +191,7 @@ def validate(c):
                "copper_loss_w_per_nm2", "iron_loss_w_per_radps2", "idle_loss_w",
                "regen_max_torque_nm", "regen_max_power_kw", "max_charge_a",
                "min_soc", "initial_soc", "auxiliary_power_w", "yaw_rate_gain_s",
-               "front_brake_fraction"}
+               "front_brake_fraction", "roll_damping_nmsprad", "front_damper_nspm", "rear_damper_nspm", "motor_inertia_kgm2"}
     for section in fields(c):
         obj = getattr(c, section.name)
         for field in fields(obj):
@@ -194,3 +226,9 @@ def validate(c):
     require(s.control_dt_s >= s.dt_s and abs(s.control_dt_s / s.dt_s - round(s.control_dt_s / s.dt_s)) < 1e-8, "control_dt_s must be an integer multiple of dt_s")
     require(s.dashboard_max_points >= 2, "dashboard_max_points must be >= 2")
     require(s.log_level in ("DEBUG", "INFO", "WARNING", "ERROR"), "Invalid log_level")
+    require(s.integrator in ("rk4", "rk45"), "integrator must be rk4 or rk45")
+    require(s.min_internal_step_s <= s.max_internal_step_s, "Invalid internal step bounds")
+    require(c.dynamics.model in ("planar", "roll_pitch"), "dynamics.model must be planar or roll_pitch")
+    require(0 < c.dynamics.max_pitch_deg < 45, "max_pitch_deg must be in (0, 45)")
+    if c.dynamics.model == "roll_pitch":
+        require(c.vehicle.cg_height_m > 0, "Roll/pitch model requires positive CG height")

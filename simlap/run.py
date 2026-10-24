@@ -3,6 +3,7 @@
 import argparse
 import json
 from datetime import datetime, timezone
+from dataclasses import replace
 from pathlib import Path
 
 from .config import load_config
@@ -17,11 +18,15 @@ def run_maneuver(name, config, parameters, output="results"):
     recorder = Recorder(directory, config, name, parameters)
     try:
         simulator = Simulator(config, recorder=recorder)
-        recorder.logger.info("models chassis=%s tires=%s powertrain=%s battery=%s integrator=RK4",
+        recorder.logger.info("models chassis=%s tires=%s powertrain=%s battery=%s integrator=%s",
                              type(simulator.model).__name__, type(simulator.model.tires).__name__,
-                             type(simulator.model.powertrain).__name__, type(simulator.model.powertrain.battery).__name__)
+                             type(simulator.model.powertrain).__name__, type(simulator.model.powertrain.battery).__name__,
+                             config.simulation.integrator.upper())
         state, control, extra = prepare(name, simulator.model, config, parameters)
-        simulator.reset(state)
+        state = simulator.reset(state)
+        trim_control, next_control = control, 0.0
+        balance = name == "cornering" and hasattr(state, "roll_rad") and (parameters.get("roll_kp", 0) or parameters.get("roll_kd", 0))
+        extra["roll_balance_controller"] = bool(balance)
         recorder.logger.info("initial state=%s control=%s trim=%s", state, control, extra)
         recorder.record(0.0, state, control, simulator.model.evaluate(state, control).signals)
         duration = parameters["duration_s"]
@@ -30,6 +35,11 @@ def run_maneuver(name, config, parameters, output="results"):
             if name == "braking" and simulator.state.vx_mps <= config.simulation.stop_speed_mps:
                 reason = "stopped"
                 break
+            if balance and simulator.time_s >= next_control - 1e-10:
+                steer = (trim_control.steer_rad + parameters.get("roll_kp", 0) * (simulator.state.roll_rad - state.roll_rad)
+                         + parameters.get("roll_kd", 0) * simulator.state.roll_rate_radps)
+                control = replace(trim_control, steer_rad=steer)
+                next_control += config.simulation.control_dt_s
             simulator.step(control, min(config.simulation.dt_s, duration - simulator.time_s))
             if simulator.status != "running":
                 reason = simulator.status

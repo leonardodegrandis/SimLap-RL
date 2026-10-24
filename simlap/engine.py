@@ -1,22 +1,25 @@
-"""Fixed-step RK4 driver; controllers and storage stay outside physics modules."""
+"""Fixed output/control intervals with selectable internal Runge–Kutta solvers."""
 
 import math
 import time
 from dataclasses import astuple, replace
 
-from .dynamics import PlanarMotorcycle
+from .physics.factory import make_model
+from .integration import SolverStats, integrate
 from .types import Control, DynamicsModel, State
 
 
 class Simulator:
     def __init__(self, config, model: DynamicsModel = None, recorder=None):
         self.config = config
-        self.model = model or PlanarMotorcycle(config)
+        self.model = model or make_model(config)
         self.recorder = recorder
         self.reset()
 
     def reset(self, state=None):
         state = state or State(soc=self.config.battery.initial_soc)
+        if hasattr(self.model, "initial_state"):
+            state = self.model.initial_state(state)
         if not all(math.isfinite(x) for x in astuple(state)) or state.vx_mps < 0:
             raise ValueError("Initial state must be finite and forward-moving")
         if not self.config.battery.min_soc <= state.soc <= self.config.battery.max_soc:
@@ -27,17 +30,17 @@ class Simulator:
             raise ValueError("Initial steering exceeds actuator limit")
         self.state, self.time_s, self.steps = state, 0.0, 0
         self.status = "running"
+        self.solver_stats = SolverStats()
         return self.state
 
     def _integrate(self, state, control, dt):
-        evaluate = self.model.evaluate
-        k1 = evaluate(state, control).derivative
-        k2 = evaluate(state.shifted(k1, dt / 2), control).derivative
-        k3 = evaluate(state.shifted(k2, dt / 2), control).derivative
-        k4 = evaluate(state.shifted(k3, dt), control).derivative
-        average = type(state)(*((a + 2*b + 2*c + d) / 6 for a, b, c, d in
-                          zip(astuple(k1), astuple(k2), astuple(k3), astuple(k4))))
-        return state.shifted(average, dt)
+        result, stats = integrate(lambda value: self.model.evaluate(value, control).derivative,
+                                  state, dt, self.config.simulation)
+        self.solver_stats.accepted += stats.accepted
+        self.solver_stats.rejected += stats.rejected
+        self.solver_stats.evaluations += stats.evaluations
+        self.solver_stats.max_accepted_error = max(self.solver_stats.max_accepted_error, stats.max_accepted_error)
+        return result
 
     def step(self, control: Control, dt_s=None):
         if self.status != "running":
@@ -46,6 +49,7 @@ class Simulator:
         if not math.isfinite(dt) or not 0 < dt <= self.config.simulation.dt_s * (1 + 1e-9):
             raise ValueError("step dt must be positive and no larger than configured physics dt")
         start = time.perf_counter()
+        self.solver_stats = SolverStats()
         state = self._integrate(self.state, control, dt)
         b = self.config.battery
         if state.soc < b.min_soc or state.soc > b.max_soc:
@@ -73,11 +77,21 @@ class Simulator:
             self.status = "wheel_lift_model_limit"
         if evaluation.signals.get("lean_limit_exceeded", 0):
             self.status = "lean_model_limit"
+        if evaluation.signals.get("pitch_limit_exceeded", 0):
+            self.status = "pitch_model_limit"
+        if evaluation.signals.get("suspension_limit_exceeded", 0):
+            self.status = "suspension_model_limit"
+        evaluation.signals.update(integrator_accepted_steps=self.solver_stats.accepted,
+                                  integrator_rejected_steps=self.solver_stats.rejected,
+                                  integrator_rhs_evaluations=self.solver_stats.evaluations,
+                                  integrator_error_norm=self.solver_stats.max_accepted_error)
         elapsed = (time.perf_counter() - start) * 1000
         if self.recorder:
             self.recorder.record(self.time_s, state, control, evaluation.signals, elapsed)
-            self.recorder.logger.debug("step=%d t=%.6f dt=%.6f solver=RK4 stages=4 cpu_ms=%.3f status=%s",
-                                       self.steps, self.time_s, dt, elapsed, self.status)
+            self.recorder.logger.debug("step=%d t=%.6f dt=%.6f solver=%s accepted=%d rejected=%d evaluations=%d error=%.3g cpu_ms=%.3f status=%s",
+                                       self.steps, self.time_s, dt, self.config.simulation.integrator.upper(),
+                                       self.solver_stats.accepted, self.solver_stats.rejected, self.solver_stats.evaluations,
+                                       self.solver_stats.max_accepted_error, elapsed, self.status)
         return state, evaluation.signals
 
     def advance(self, control: Control, duration_s=None):

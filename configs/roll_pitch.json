@@ -1,0 +1,9 @@
+{
+  "dynamics": {"model": "roll_pitch"},
+  "simulation": {
+    "integrator": "rk45",
+    "relative_tolerance": 0.000001,
+    "absolute_tolerance": 0.00000001,
+    "max_internal_step_s": 0.001
+  }
+}

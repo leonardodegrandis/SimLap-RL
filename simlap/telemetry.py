@@ -18,6 +18,17 @@ def write_json(path, data):
     path.write_text(json.dumps(data, indent=2, allow_nan=False) + "\n")
 
 
+def provenance():
+    """Identify the code and runtime behind a simulation or training run."""
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, stderr=subprocess.DEVNULL, text=True).strip()
+    except (subprocess.SubprocessError, OSError):
+        commit = None
+    sources = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
+               for p in sorted((ROOT / "simlap").rglob("*.py"))}
+    return dict(python=platform.python_version(), platform=platform.platform(), git_commit=commit, source_sha256=sources)
+
+
 class Recorder:
     def __init__(self, directory, config, maneuver, parameters):
         self.directory = Path(directory)
@@ -34,22 +45,17 @@ class Recorder:
         self.logger.addHandler(self.handler)
         resolved = config.to_dict()
         write_json(self.directory / "config.json", resolved)
-        try:
-            commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, stderr=subprocess.DEVNULL, text=True).strip()
-        except (subprocess.SubprocessError, OSError):
-            commit = None
-        sources = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
-                   for p in sorted((ROOT / "simlap").glob("*.py"))}
         self.metadata = dict(maneuver=maneuver, parameters=parameters,
                              created_utc=datetime.now(timezone.utc).isoformat(),
-                             python=platform.python_version(), platform=platform.platform(),
-                             git_commit=commit, source_sha256=sources,
+                             **provenance(),
                              config_sha256=hashlib.sha256(json.dumps(resolved, sort_keys=True).encode()).hexdigest())
         write_json(self.directory / "metadata.json", self.metadata)
         self.logger.info("start maneuver=%s parameters=%s config_sha256=%s", maneuver, parameters, self.metadata["config_sha256"])
 
     def record(self, time_s, state, control, signals, cpu_ms=0.0):
-        row = dict(time_s=time_s, **asdict(state), **signals, step_cpu_ms=cpu_ms)
+        solver = dict(integrator_accepted_steps=0, integrator_rejected_steps=0,
+                      integrator_rhs_evaluations=0, integrator_error_norm=0.0)
+        row = dict(time_s=time_s, **asdict(state), **dict(solver, **signals), step_cpu_ms=cpu_ms)
         row.update({f"command_{key}": value for key, value in asdict(control).items()})
         if not all(value is None or math.isfinite(value) for value in row.values()):
             raise FloatingPointError("Non-finite telemetry")
@@ -101,7 +107,14 @@ class Recorder:
         descriptions = {
             "ax_mps2": "Body-frame longitudinal acceleration (force / mass), not dvx/dt",
             "ay_mps2": "Body-frame lateral acceleration (force / mass), not dvy/dt",
-            "lean_estimate_deg": "Quasi-steady atan(ay/g); roll is not a dynamic state",
+            "lean_estimate_deg": "Quasi-steady atan(ay/g); distinct from actual roll_deg in the roll/pitch model",
+            "front_fx_n": "Front tire longitudinal force in the steered wheel frame",
+            "front_fy_n": "Front tire lateral force in the steered wheel frame",
+            "roll_rad": "Actual roll angle, positive leaning left",
+            "pitch_rad": "Actual pitch angle, positive nose up",
+            "heave_m": "Suspension heave from static equilibrium; CG height = h*cos(roll) + heave",
+            "front_slip_ratio": "(wheel rolling speed - contact longitudinal speed) / regularized speed",
+            "integrator_error_norm": "Largest accepted normalized embedded error; zero for fixed RK4",
             "chemical_energy_j": "Signed integral of OCV * current; positive means consumed",
             "battery_terminal_power_w": "Positive discharge, negative charging, includes auxiliaries",
             "power_balance_error_w": "Chemical power minus wheel power, all electrical/driveline losses and auxiliaries",

@@ -70,7 +70,10 @@ async function selectRun(id) {
     run=data;comparison=null;cursor=0;$("compare").value="";$("run-select").value=id;
     $("workspace").hidden=false;selected.clear();message("");
     const s=run.summary,c=run.config;
-    $("run-info").textContent=`${s.maneuver} | ${s.reason} | ${run.rows.length.toLocaleString()} samples, full resolution | ${s.duration_s.toFixed(3)} s | motor ${c.motor.rating}, ${c.motor.peak_power_kw} kW peak | mass ${c.vehicle.mass_kg} kg`;
+    const lap = !("lap_time_s" in s) ? "" : s.is_success && Number.isFinite(s.lap_time_s)
+      ? `Lap time: ${s.lap_time_s.toFixed(3)} s | `
+      : `Lap not completed (${((s.completion_fraction || 0)*100).toFixed(1)}%) | `;
+    $("run-info").textContent=`${s.maneuver} | ${lap}${s.reason} | ${run.rows.length.toLocaleString()} samples, full resolution | ${s.duration_s.toFixed(3)} s | motor ${c.motor.rating}, ${c.motor.peak_power_kw} kW peak | mass ${c.vehicle.mass_kg} kg`;
     $("config").textContent=JSON.stringify(c,null,2);$("checks").textContent=JSON.stringify(s,null,2);
     $("downloads").replaceChildren();
     ["telemetry.csv","engine.log","config.json","metadata.json","summary.json","channels.json"].forEach(name=>{

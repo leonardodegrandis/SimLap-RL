@@ -2,6 +2,6 @@
 
 from .config import load_config
 from .engine import Simulator
-from .types import Control, State
+from .types import Control, RollPitchState, State
 
-__all__ = ["Control", "Simulator", "State", "load_config"]
+__all__ = ["Control", "Simulator", "State", "RollPitchState", "load_config"]

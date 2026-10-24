@@ -9,5 +9,8 @@ description = "Modular electric motorcycle physics and maneuver laboratory"
 requires-python = ">=3.9"
 dependencies = []
 
+[project.optional-dependencies]
+rl = ["stable-baselines3==2.6.0", "gymnasium==1.1.1", "torch>=2.3,<2.9", "numpy>=1.24,<3"]
+
 [tool.setuptools.packages.find]
 include = ["simlap*"]

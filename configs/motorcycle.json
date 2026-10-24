@@ -66,6 +66,29 @@
     "load_transfer_tolerance_n": 0.1,
     "stop_speed_mps": 0.05,
     "log_level": "DEBUG",
-    "dashboard_max_points": 2000
+    "dashboard_max_points": 2000,
+    "integrator": "rk4",
+    "relative_tolerance": 0.000001,
+    "absolute_tolerance": 0.00000001,
+    "max_internal_step_s": 0.005,
+    "min_internal_step_s": 0.00000001,
+    "max_internal_steps": 10000
+  },
+  "dynamics": {
+    "model": "planar",
+    "roll_inertia_kgm2": 30.0,
+    "pitch_inertia_kgm2": 70.0,
+    "roll_damping_nmsprad": 4.0,
+    "front_spring_npm": 30000.0,
+    "rear_spring_npm": 35000.0,
+    "front_damper_nspm": 1800.0,
+    "rear_damper_nspm": 2000.0,
+    "front_wheel_inertia_kgm2": 0.60,
+    "rear_wheel_inertia_kgm2": 0.80,
+    "motor_inertia_kgm2": 0.02,
+    "front_longitudinal_stiffness_n": 18000.0,
+    "rear_longitudinal_stiffness_n": 20000.0,
+    "max_pitch_deg": 12.0,
+    "max_suspension_displacement_m": 0.12
   }
 }

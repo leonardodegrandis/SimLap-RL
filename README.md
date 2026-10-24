@@ -1,6 +1,24 @@
 # SimLap
 
-A small, dependency-free electric motorcycle simulator with modular physics, reproducible maneuver runs, and a local dashboard. Python **3.9+**. No RL or trajectory input is required.
+A small electric motorcycle simulator with modular physics, reproducible maneuver runs, a local dashboard, and optional reinforcement learning. Python **3.9+**. The core physics has no third-party dependencies; learning adds Gymnasium, PyTorch and Stable-Baselines3.
+
+For **throttle/brake/steering training on the oval**, see the [RL guide](simlap/rl/README.md) and [track geometry guide](tracks/README.md). Quick start after installing the optional dependencies:
+
+```sh
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -e '.[rl]'
+.venv/bin/python scripts/train.py
+```
+
+RL settings are in `configs/rl/oval_sac.json`. Track dimensions are in `tracks/oval.json`. The policy receives local road geometry, not a target speed or racing trajectory.
+
+For **dynamic roll, pitch, suspension and wheel/tire slip**, see the [advanced physics guide](simlap/physics/README.md). Run its three example maneuvers with:
+
+```sh
+.venv/bin/python -m simlap.run all --override configs/roll_pitch.json --maneuvers configs/maneuvers_roll_pitch.json
+```
+
+This selects the new chassis and adaptive RK45. The default remains planar so existing training/checkpoints retain their model.
 
 ```sh
 python3 -m venv .venv
@@ -26,9 +44,12 @@ Individual entry points:
 .venv/bin/python scripts/acceleration.py
 .venv/bin/python scripts/braking.py
 .venv/bin/python scripts/cornering.py
+.venv/bin/python scripts/lap_time.py --checkpoint training_runs/YOUR_RUN/best
 .venv/bin/python -m simlap.run all --override configs/nominal.json
 .venv/bin/python -m unittest discover -s tests -v
 ```
+
+`lap_time.py` runs one deterministic lap with the saved policy, physics and track. Select its `lap_time` run in the dashboard to see the lap time in the header and plot the full lap telemetry. Incomplete attempts show their completion percentage instead of a lap time.
 
 ## Configuration
 
@@ -43,9 +64,10 @@ Edit [configs/motorcycle.json](configs/motorcycle.json) for the full model and [
 | `inverter` | Conversion efficiency and energized idle loss |
 | `battery` | Rated kWh and voltage, SOC/OCV curve, pack resistance, current/voltage/SOC limits, initial SOC, auxiliaries |
 | `actuators` | Response times, steering angle/rate limits, brake force/bias, regen switch, low-speed braking regularization, yaw-rate adapter |
-| `simulation` | Physics/control steps, load-transfer solver settings, stop threshold, engine log level, dashboard sample count |
+| `dynamics` | Chassis selection, roll/pitch and wheel inertias, springs/dampers, longitudinal tire stiffness, pitch/travel limits |
+| `simulation` | Physics/control steps, RK4/RK45 method, internal step bounds/tolerances, load-transfer solver settings, logging |
 
-The motor map peaks at **48 kW mechanical shaft power**. Battery power is larger during motoring because of losses. `motor.rating: "nominal"` multiplies the entire torque/power envelope by `motor.nominal_factor` (default 0.75, giving a 36 kW ceiling). This is a selectable map, not a thermally enforced continuous rating. Both map axes are editable. The first power-map segment provides finite launch torque; the final zero-power point sets the speed cutoff. Torque is additionally capped by `max_torque_nm`, grip and pack limits.
+The motor map peaks at **48 kW mechanical shaft power**. Battery power is larger during motoring because of losses. `motor.rating: "nominal"` multiplies the entire torque/power envelope by `motor.nominal_factor` (default 0.75, giving a 36 kW ceiling). This is a selectable map, not a thermally enforced continuous rating. Both map axes are editable. The first power-map segment provides finite launch torque; the final zero-power point sets the speed cutoff. Torque is additionally capped by `max_torque_nm` and pack limits. The planar model also limits torque by tire grip; the roll/pitch model allows wheelspin.
 
 Use `--config path.json` to replace the complete config, or repeat `--override path.json` to merge partial changes in order. Unknown keys and invalid ranges are rejected. For example:
 
@@ -61,14 +83,14 @@ Use `--config path.json` to replace the complete config, or repeat `--override p
 
 ## Model and assumptions
 
-The chassis is a **forward-only planar 3-DOF single-track model**: longitudinal, lateral and yaw motion. World position and heading are integrated along with body velocities and yaw rate. Positive steering/yaw/lateral motion is left; angles are radians unless marked otherwise. The model uses SI throughout.
+The default chassis is a **forward-only planar 3-DOF single-track model**: longitudinal, lateral and yaw motion. The description below covers this baseline; the selectable [roll/pitch chassis](simlap/physics/README.md) adds suspension and wheel dynamics with a different tire law. Positive steering/yaw/lateral motion is left; angles are radians unless marked otherwise. Both use SI units.
 
 ```
 Control → actuator dynamics / optional yaw-rate adapter
         → motor map + electrical limits
         → tire forces ↔ algebraic longitudinal load transfer
         → chassis derivatives + battery/energy derivatives
-        → RK4 → next state + telemetry
+        → RK4 or adaptive RK45 → next state + telemetry
 ```
 
 - Chassis: `dvx/dt = Fx/m + r*vy`, `dvy/dt = Fy/m - r*vx`, `dr/dt = Mz/Iz`. Front tire forces are rotated into the body frame. Aerodynamic drag acts at the CG. Rolling resistance is a longitudinal resistive force.
@@ -82,7 +104,7 @@ Control → actuator dynamics / optional yaw-rate adapter
 - Braking uses a fixed configurable front/rear bias. Rear regen replaces rear friction braking within the requested rear brake force; when charge acceptance or regen capability decreases, friction braking fills the remainder. Regen fades at low speed. Any brake command takes priority over throttle.
 - No temperatures or thermal derating yet. Per-component heat **rates and accumulated joules** are available for future thermal modules. Losses are not inferred temperatures.
 
-The engine uses RK4 with a 5 ms default physics step. Controls can be held for a separate 50 ms default interval. It terminates at an encountered SOC boundary, locating the event within the final step. A run starting at maximum SOC can still brake using friction and regen that only supplies auxiliaries. Braking stops at the configured speed threshold (0.05 m/s), so reported stopping distance is to that threshold, not mathematical zero.
+The engine defaults to RK4 with a 5 ms output step. RK45 and internal substeps are selectable independently of the 50 ms default control interval. See the [solver settings](simlap/physics/README.md#integration-and-telemetry). It terminates at an encountered SOC boundary, locating the event within the final step. A run starting at maximum SOC can still brake using friction and regen that only supplies auxiliaries. Braking stops at the configured speed threshold (0.05 m/s), so reported stopping distance is to that threshold, not mathematical zero.
 
 ## Maneuvers
 
@@ -92,6 +114,8 @@ The engine uses RK4 with a 5 ms default physics step. Controls can be held for a
 
 Duration completion is distinct from hitting a model limit. The default example outputs are synthetic; validate against measurements before using lap times or performance predictions.
 
+With the roll/pitch chassis, corner trim also solves suspension, lean and wheel-speed equilibrium. `configs/maneuvers_roll_pitch.json` enables an explicit roll PD controller for the cornering test. Its gains are configurable; RL never uses this controller. See the [balance conventions and limitations](simlap/physics/README.md#balance-and-maneuver-control).
+
 ## Logs
 
 Every run gets a unique directory under `results/`:
@@ -99,14 +123,14 @@ Every run gets a unique directory under `results/`:
 | File | Content |
 | --- | --- |
 | `telemetry.csv` | Initial sample and every accepted physics step: all states, commands, actual actuators, forces, slips, grip usage, loads, lean estimate, torque, RPM, electrical flows, losses, energy totals, numerical diagnostics and step timing |
-| `engine.log` | Initialization, component names, trim, every RK4 step at DEBUG, numerical warnings, termination summary and exception tracebacks |
+| `engine.log` | Initialization, component names, trim, output steps with internal solver statistics at DEBUG, termination summary and exception tracebacks |
 | `config.json` | Exact resolved model configuration |
 | `metadata.json` | Maneuver parameters, timestamps, Python/platform, Git commit if available, source-file hashes and config hash |
 | `summary.json` | Full-resolution performance metrics and numerical checks |
 | `channels.json` | Signal conventions and units |
 | `dashboard.json` | Sampled preview plus metadata/config; the telemetry server replaces its preview rows with full CSV data |
 
-Physics signals in a row are evaluated at that row's timestamp. `ax_mps2` and `ay_mps2` are force/mass accelerations, **not** derivatives of the rotating-frame velocity components; both derivatives are also logged. Energy counters use RK4 stage values. `step_cpu_ms` measures elapsed compute time for integration and endpoint evaluation, excluding log I/O. DEBUG records accepted steps, not every intermediate RK stage. Failed simulations retain their CSV and traceback; only completed artifact sets appear in the dashboard.
+Physics signals in a row are evaluated at that row's timestamp. `ax_mps2` and `ay_mps2` are force/mass accelerations, **not** derivatives of the rotating-frame velocity components; both derivatives are also logged. Energy counters use Runge–Kutta stage values. `step_cpu_ms` measures elapsed compute time for integration and endpoint evaluation, excluding log I/O. DEBUG records output steps with internal accepted/rejected counts, not every intermediate RK stage. Failed simulations retain their CSV and traceback; only completed artifact sets appear in the dashboard.
 
 Full telemetry is retained in memory while a maneuver runs to calculate metrics and build dashboard samples. For long training sessions, use the engine without a recorder or replace `Recorder` with a streaming implementation.
 
@@ -115,11 +139,15 @@ Full telemetry is retained in memory while a maneuver runs to calculate metrics 
 | Module | Responsibility / replacement point |
 | --- | --- |
 | `types.py` | Immutable `Control`, `State`, `Evaluation`; controller and dynamics interfaces |
-| `engine.py` | Reset, RK4 step/advance, boundary handling, optional recorder |
-| `dynamics.py` | Chassis, actuator dynamics and component coupling |
-| `tires.py` | `TireModel` interface and default saturating tire |
-| `powertrain.py` | `PowertrainModel` interface and mapped electric implementation |
-| `battery.py` | `BatteryModel` interface and resistive pack |
+| `engine.py`, `integration.py` | Reset, step/advance, RK4/RK45, boundary handling, optional recorder |
+| `physics/chassis.py`, `physics/roll_pitch.py` | Planar and roll/pitch chassis, actuator dynamics and component coupling |
+| `physics/factory.py`, `physics/trim.py` | Model selection and advanced steady-corner trim |
+| `physics/tires.py` | Planar saturating and wheel-speed combined-slip tires |
+| `physics/powertrain.py` | `PowertrainModel` interface and mapped electric implementation |
+| `physics/battery.py` | `BatteryModel` interface and resistive pack |
+| `tracks/` | Geometry, projection, centerline/boundary export |
+| `controllers/` | Independent benchmark controllers |
+| `rl/` | Gymnasium environment, SAC training, evaluation, checkpoints and logging |
 | `maneuvers.py` | Maneuver initialization and steady-state trim |
 | `telemetry.py` | Artifacts and summaries |
 | `dashboard.py` + `dashboard/` | Local read-only result browser |
@@ -128,9 +156,9 @@ Inject components explicitly; no registry or plugin framework is required:
 
 ```python
 from simlap import Control, Simulator, load_config
-from simlap.battery import ResistiveBattery
-from simlap.dynamics import PlanarMotorcycle
-from simlap.powertrain import ElectricPowertrain
+from simlap.physics.battery import ResistiveBattery
+from simlap.physics.chassis import PlanarMotorcycle
+from simlap.physics.powertrain import ElectricPowertrain
 
 config = load_config()
 battery = ResistiveBattery(config.battery)  # replace with your implementation
@@ -146,10 +174,10 @@ state, signals = sim.advance(Control(throttle=0.5, yaw_rate_radps=0.1))
 
 `step()` advances one physics step; `advance()` holds an action for one control interval. Reset after termination. Throttle/brake are in `[0,1]`; steering is radians; yaw-rate commands are rad/s. Steering and yaw-rate commands are mutually exclusive. The yaw-rate adapter is geometric feedforward plus proportional feedback, **not** a guaranteed tracking controller.
 
-To add roll, RC battery states or temperatures, subclass the frozen `State` dataclass with additional fields and provide a dynamics model returning matching derivative states. RK4 preserves the concrete state type, and the recorder automatically includes its fields. Keep `evaluate(state, control)` pure: do not mutate hidden battery/thermal states during RK4 calls. Extra states must be integrated by the engine. A radically different state layout or reverse-motion model should replace the engine's small motorcycle-specific boundary checks as well. New component parameters should get typed config fields and validation.
+To add RC battery states or temperatures, subclass the frozen `State` or `RollPitchState` dataclass and provide a dynamics model returning matching derivative states. Both integrators preserve the concrete state type, and the recorder automatically includes its fields. Keep `evaluate(state, control)` pure: do not mutate hidden battery/thermal states during RK calls. Extra states must be integrated by the engine. A radically different state layout or reverse-motion model should replace the engine's small motorcycle-specific boundary checks as well. New component parameters should get typed config fields and validation.
 
 Tests cover electrical energy conservation, voltage/current/SOC limits, launch losses, nominal scaling, combined tire grip, regen blending, braking, timestep convergence, left/right trim stability, yaw actuation, artifacts and extended-state integration.
 
 ## Technical references
 
-The baseline follows standard [planar single-track equations](https://www.mathworks.com/help/vdynblks/ref/vehiclebody3dof.html), [mapped motor/loss modeling](https://www.mathworks.com/help/autoblks/ref/mappedmotor.html), and [equivalent-circuit battery modeling](https://www.mathworks.com/help/simscape-battery/ref/batteryequivalentcircuit.html). The implementation is intentionally simpler than these reference products. A fuller [motorcycle lateral model](https://www.ibisc.univ-evry.fr/~harioui/publications/TIV_2019_vf.pdf) illustrates the roll/steer dynamics omitted here.
+The baseline follows standard [planar single-track equations](https://www.mathworks.com/help/vdynblks/ref/vehiclebody3dof.html), [mapped motor/loss modeling](https://www.mathworks.com/help/autoblks/ref/mappedmotor.html), and [equivalent-circuit battery modeling](https://www.mathworks.com/help/simscape-battery/ref/batteryequivalentcircuit.html). The implementation is intentionally simpler than these reference products. A fuller [motorcycle lateral model](https://www.ibisc.univ-evry.fr/~harioui/publications/TIV_2019_vf.pdf) illustrates additional steering and gyroscopic dynamics beyond this simulator.

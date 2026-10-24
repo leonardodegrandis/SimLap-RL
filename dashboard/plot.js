@@ -3,7 +3,7 @@
 // Canvas renderer: no channel-specific knowledge or data resampling.
 function channelUnit(key) {
   const suffixes = {mps2:"m/s²", radps2:"rad/s²", radps:"rad/s", mps:"m/s", rpm:"rpm", nm:"N·m",
-    rad:"rad", deg:"°", ms:"ms", s:"s", m:"m", n:"N", a:"A", v:"V", w:"W", j:"J"};
+    rad:"rad", deg:"°", ms:"ms", s:"s", m:"m", pm:"1/m", n:"N", a:"A", v:"V", w:"W", j:"J"};
   if (/^(command_)?(throttle|brake)$/.test(key) || key === "soc" || key.endsWith("_usage")) return "1";
   return suffixes[key.split("_").pop()] || "—";
 }

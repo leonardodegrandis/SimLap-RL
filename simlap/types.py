@@ -1,7 +1,8 @@
 """Small, stable boundary objects for controllers and replaceable physics modules."""
 
 import math
-from dataclasses import astuple, dataclass, fields
+from dataclasses import dataclass, fields
+from functools import lru_cache
 from typing import Dict, Optional, Protocol
 
 
@@ -46,10 +47,36 @@ class State:
     distance_m: float = 0.0
 
     def shifted(self, derivative, dt):
-        return type(self)(*(x + dt * dx for x, dx in zip(astuple(self), astuple(derivative))))
+        return type(self)(*(x + dt * dx for x, dx in zip(state_values(self), state_values(derivative))))
+
+
+@lru_cache(maxsize=None)
+def state_fields(cls):
+    return tuple(item.name for item in fields(cls))
+
+
+def state_values(state):
+    """Numerical states contain scalars; avoid recursive dataclass deep copies."""
+    return tuple(getattr(state, name) for name in state_fields(type(state)))
 
 
 STATE_NAMES = tuple(f.name for f in fields(State))
+
+
+@dataclass(frozen=True)
+class RollPitchState(State):
+    roll_rad: float = 0.0  # Positive lean to the left.
+    roll_rate_radps: float = 0.0
+    pitch_rad: float = 0.0  # Positive nose up.
+    pitch_rate_radps: float = 0.0
+    heave_m: float = 0.0  # Upward suspension displacement from static equilibrium.
+    heave_rate_mps: float = 0.0
+    front_wheel_radps: float = 0.0
+    rear_wheel_radps: float = 0.0
+    tire_heat_j: float = 0.0
+    rolling_heat_j: float = 0.0
+    suspension_heat_j: float = 0.0
+    roll_damper_heat_j: float = 0.0
 
 
 @dataclass(frozen=True)

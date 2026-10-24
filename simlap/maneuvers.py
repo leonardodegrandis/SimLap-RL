@@ -19,14 +19,15 @@ def load_maneuvers(path=None):
     if set(data) != set(required):
         raise ValueError("Maneuver config must define acceleration, braking and cornering")
     for name, keys in required.items():
-        if set(data[name]) != keys:
+        optional = {"roll_kp", "roll_kd"} if name == "cornering" else set()
+        if not keys <= set(data[name]) or set(data[name]) - keys - optional:
             raise ValueError(f"Invalid keys for {name}: expected {sorted(keys)}")
         for key, value in data[name].items():
             if type(value) not in (int, float) or not math.isfinite(value):
                 raise ValueError(f"{name}.{key} must be finite")
             if key in ("throttle", "brake"):
                 valid = 0 <= value <= 1
-            elif key == "initial_speed_mps":
+            elif key in ("initial_speed_mps", "roll_kp", "roll_kd"):
                 valid = value >= 0
             elif key == "radius_m":
                 valid = value != 0
@@ -45,6 +46,8 @@ def cornering_trim(model, config, params):
     Speed means total ground speed. Heading starts tangent to the circle after
     compensating sideslip. Controls remain constant during the subsequent run.
     """
+    if hasattr(model, "cornering_trim"):
+        return model.cornering_trim(params)
     speed, radius = params["speed_mps"], params["radius_m"]
     v, env = config.vehicle, config.environment
     lateral_accel = speed**2 / abs(radius)

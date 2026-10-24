@@ -1,0 +1,7 @@
+{
+  "type": "stadium",
+  "name": "oval",
+  "straight_length_m": 120.0,
+  "corner_radius_m": 30.0,
+  "width_m": 8.0
+}
